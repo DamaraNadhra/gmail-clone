@@ -18,6 +18,17 @@ const config = {
     defaultLocale: "en",
   },
   transpilePackages: ["geist"],
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "ssl.gstatic.com",
+        port: "",
+        pathname: "/ui/v1/icons/mail/rfr/logo_gmail_lockup_default_1x_r5.png",
+        search: "",
+      },
+    ],
+  },
 };
 
 export default config;

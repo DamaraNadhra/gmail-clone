@@ -2,19 +2,109 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-    provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-    provider = "postgresql"
-    url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-model Post {
-    id        Int      @id @default(autoincrement())
-    name      String
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
+model User {
+  id        String   @id @default(cuid())
+  fullName  String?
+  firstName String?
+  lastName  String?
+  birthDay  DateTime?
+  publicMetadata Json?
+  googleScopes String[]
+  imageUrl  String?
+  provider  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-    @@index([name])
+  email_person  email_person?
+}
+
+model Email {
+  id            String   @id @default(cuid())
+  threadId      String?
+  emailFromId   String?  // Optional: If sender is a registered user
+  emailDate     DateTime
+  emailSubject  String
+  emailSnippet  String
+  emailContent  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  isRead        Boolean  @default(false)
+  isStarred     Boolean  @default(false)
+  isImportant   Boolean  @default(false)
+  isSpam        Boolean  @default(false)
+  isTrash       Boolean  @default(false)
+  isDraft       Boolean  @default(false)
+  isSent        Boolean  @default(false)
+
+  sender   email_person? @relation("EmailFrom", fields: [emailFromId], references: [id])
+  recipients EmailToEmail[]
+  thread   Thread? @relation(fields: [threadId], references: [id])
+  
+  @@index([threadId])
+  @@index([emailFromId])
+}
+
+model Thread {
+  id String @id @default(cuid())
+  emails Email[] 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model email_person {
+  id      String  @id @default(cuid())
+  userId  String? @unique
+  email String @unique
+  name String?
+
+  user   User? @relation(fields: [userId], references: [id])
+  sentEmails Email[] @relation("EmailFrom")
+  receivedEmails EmailToEmail[] 
+  senderEmail EmailComposeDraft[]
+  createdAt DateTime @default(now())
+  
+  @@index([email])
+}
+
+model EmailToEmail {
+  id            String  @id @default(cuid())  // Unique ID for this relationship
+  emailId       String?  // Email being sent
+  emailPersonId String  // Recipient of the email
+  composeDraftId String?
+  isTo          Boolean @default(false) // True if recipient is in "To" field
+  isCc          Boolean @default(false) // True if recipient is in "CC" field
+  isBcc         Boolean @default(false) // True if recipient is in "BCC" field
+
+  email        Email?        @relation(fields: [emailId], references: [id] , onDelete: Cascade)
+  emailPerson  email_person @relation(fields: [emailPersonId], references: [id] , onDelete: Cascade)
+  composeDraft EmailComposeDraft? @relation(fields: [composeDraftId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  
+  @@index([emailId])
+  @@index([emailPersonId])
+  @@index([composeDraftId])
+}
+
+model EmailComposeDraft {
+  id String @id @default(cuid())
+  emailFromId String
+  emailSubject String
+  emailContent String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sender email_person @relation(fields: [emailFromId], references: [id], onDelete: Cascade)
+  recipients EmailToEmail[]
+  
+  @@index([emailFromId])
 }
