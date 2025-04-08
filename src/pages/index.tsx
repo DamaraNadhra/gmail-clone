@@ -1,11 +1,11 @@
 import Head from "next/head";
-import { SignInButton, useUser } from "@clerk/nextjs";
+// import { SignInButton, useUser } from "@clerk/nextjs";
 import EmailInbox from "~/components/EmailInbox";
 import GmailLayout, { useSearch } from "~/components/GmailLayout";
 import Image from "next/image";
-
+import { signIn, useSession } from "next-auth/react";
 export default function Home() {
-  const { isSignedIn, user } = useUser();
+  const { data: session } = useSession();
   const { query } = useSearch();
   return (
     <>
@@ -18,7 +18,7 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      {isSignedIn ? (
+      {session ? (
         <EmailInbox search={query} />
       ) : (
         <div className="flex min-h-screen flex-col items-center justify-center bg-gray-100 dark:bg-gray-900">
@@ -46,11 +46,10 @@ export default function Home() {
                 products
               </p>
 
-              <SignInButton mode="modal">
-                <button className="w-full rounded-md bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600">
+                <button className="w-full rounded-md bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600"
+                onClick={() => signIn('google')}>
                   Sign In
                 </button>
-              </SignInButton>
             </div>
           </div>
         </div>

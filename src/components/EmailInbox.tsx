@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "~/utils/api";
-import { useUser } from "@clerk/nextjs";
+// import { useUser } from "@clerk/nextjs";
 import moment from "~/utils/moment-adapter";
 import { useRouter } from "next/router";
+import useWebSocket from "react-use-websocket";
 import { NumberParam, useQueryParams, withDefault } from "use-query-params";
 import {
   RefreshCw,
@@ -10,51 +11,77 @@ import {
   ChevronLeft,
   ChevronRight,
   Star,
-  Archive,
   Trash2,
-  Mail,
+  Archive,
+  MailOpen,
   Clock,
-  Tag,
+  MailQuestion,
   Inbox,
 } from "lucide-react";
-import {
-  rippleEffect,
-  checkboxRippleEffect,
-} from "~/lib/helpers/animationHelper";
+
 import { Checkbox } from "./ui/checkbox";
 import { Table, TableBody, TableCell, TableRow } from "./ui/table";
-import { z } from "zod";
+import { Button } from "./ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useSession } from "next-auth/react";
+import AttachmentCard from "./AttachmentPreviewCard";
+import AttachmentPreviewModal from "./AttachmentPreviewModal";
 
-export default function EmailInbox({
-  search,
-}: {
-  search: string;
-}) {
+export default function EmailInbox({ search }: { search: string }) {
   const router = useRouter();
-  const { user } = useUser();
+  const { data: session } = useSession();
+  const user = session?.user;
+  const userId = user?.id;
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+  const [ws, setWs] = useState<WebSocket | null>(null);
   const [starredEmails, setStarredEmails] = useState<string[]>([]);
-
+  const [readEmails, setReadEmails] = useState<string[]>([]);
+  const [attachmentModal, setAttachmentModal] = useState<{
+    isOpen: boolean;
+    url: string;
+    fileType: string;
+  }>({
+    isOpen: false,
+    url: "",
+    fileType: "",
+  });
   const [page, setPage] = useQueryParams({
     page: withDefault(NumberParam, 1),
   });
+  const ctx = api.useUtils();
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isFetchingNextPage,
+    fetchNextPage,
+    hasNextPage,
+  } = api.email.fetchEmails.useInfiniteQuery(
+    {
+      userId: userId!,
+      search,
+    },
+    {
+      enabled: !!userId,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    },
+  );
 
-  const { data, isLoading, isFetching, isFetchingNextPage,
-     fetchNextPage, hasNextPage } =
-    api.email.fetchEmails.useInfiniteQuery(
-      {
-        userId: user?.id!,
-        search,
+  const { data: countData } = api.email.getUserEmailsCount.useQuery({
+    search: search || "",
+  });
+  const updateEmailMetadataMutation = api.email.updateEmailMetadata.useMutation(
+    {
+      onSuccess: () => {
+        void ctx.email.invalidate();
       },
-      {
-        enabled: !!user?.id,
-        getNextPageParam: (lastPage) => lastPage.nextCursor,
-      },
-    );
-
-  const { data: countData } = api.email.getUserEmailsCount.useQuery();
-  const toggleStarredMutation = api.email.toggleStarred.useMutation();
-
+    },
+  );
+  const syncRecentEmailsMutation = api.email.syncRecentEmails.useMutation({
+    onSuccess: () => {
+      void ctx.email.invalidate();
+    },
+  });
   const toggleEmailSelection = (id: string) => {
     setSelectedEmails((prev) =>
       prev.includes(id)
@@ -63,24 +90,96 @@ export default function EmailInbox({
     );
   };
 
+  const threads = data?.pages[page.page - 1]?.threads;
+
   const toggleStarred = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    const isStarred = starredEmails.includes(id);
     setStarredEmails((prev) =>
       prev.includes(id)
         ? prev.filter((emailId) => emailId !== id)
         : [...prev, id],
     );
+    const emails = threads?.find((thread) => thread.id === id)?.emails.filter(
+      (email) => isStarred ? !email.labelIds.includes("STARRED") : email.labelIds.includes("STARRED"),
+    );
     // save to db
-    toggleStarredMutation.mutateAsync({ emailId: id });
+    updateEmailMetadataMutation.mutateAsync({
+      emailIds: emails?.map((email) => email.id) || [],
+      ...(isStarred ? { labelsToRemove: ["STARRED"] } : { labelsToAdd: ["STARRED"] }),
+    });
   };
 
-  const emailData = data?.pages[page.page - 1]?.emails;
+  const handleRead = (id: string) => {
+    const isRead = readEmails.includes(id);
+    setReadEmails((prev) =>
+      prev.includes(id)
+        ? prev.filter((threadId) => threadId !== id)
+        : [...prev, id],
+    );
+    // save to db
+    const emails = threads?.find((thread) => thread.id === id)?.emails.filter(
+      (email) => isRead ? !email.labelIds.includes("UNREAD") : email.labelIds.includes("UNREAD"),
+    );
+    updateEmailMetadataMutation.mutateAsync({
+      emailIds: emails?.map((email) => email.id) || [],
+      ...(isRead ? { labelsToAdd: ["UNREAD"] } : { labelsToRemove: ["UNREAD"] }),
+    });
+  };
+
+  const handleArchive = (id: string) => {
+    const emails = threads?.find((thread) => thread.id === id)?.emails.filter(
+      (email) => email.labelIds.includes("INBOX"),
+    );
+    updateEmailMetadataMutation.mutateAsync({
+      emailIds: emails?.map((email) => email.id) || [],
+      labelsToRemove: ["INBOX"],
+    });
+  };
 
   useEffect(() => {
     // update starred emails
-    setStarredEmails(emailData?.filter((email) => email.isStarred).map((email) => email.id) || []);
-  }, [emailData]);
+    setStarredEmails(
+      threads
+        ?.filter((thread) =>
+          thread.emails.every((email) => email.labelIds.includes("STARRED")),
+        )
+        .map((thread) => thread.id) || [],
+    );
+    // update read emails
+    setReadEmails(
+      threads
+        ?.filter((thread) =>
+          thread.emails.every((email) => !email.labelIds.includes("UNREAD")),
+        )
+        .map((thread) => thread.id) || [],
+    );
+  }, [threads]);
 
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3001"); // 🔁 Make sure this URL is correct
+
+    ws.onopen = () => {
+      console.log("✅ WebSocket connected");
+    };
+
+    ws.onmessage = (event) => {
+      console.log("📨 Received:", event.data);
+      ctx.email.invalidate();
+    };
+
+    ws.onerror = (err) => {
+      console.error("❌ WebSocket error:", err);
+    };
+
+    ws.onclose = () => {
+      console.warn("⚠️ WebSocket disconnected");
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
   return (
     <div className="flex h-full flex-col rounded-lg bg-white">
       {/* Email toolbar */}
@@ -89,18 +188,23 @@ export default function EmailInbox({
           <div className="group relative rounded-full p-2">
             <Checkbox
               className="relative z-10"
-              checked={selectedEmails.length === emailData?.length}
+              checked={selectedEmails.length === threads?.length}
               onClick={() => {
-                if (selectedEmails.length === emailData?.length) {
+                if (selectedEmails.length === threads?.length) {
                   setSelectedEmails([]);
                 } else {
-                  setSelectedEmails(emailData?.map((email) => email.id) || []);
+                  setSelectedEmails(threads?.map((thread) => thread.id) || []);
                 }
               }}
             />
-            <span className="absolute inset-0 scale-0 rounded-full bg-gray-100 transition-transform duration-300 ease-out group-hover:scale-150"></span>
+            <span className="absolute inset-0 scale-0 rounded-full bg-gray-100 transition-transform duration-300 ease-in group-hover:scale-150"></span>
           </div>
-          <button className="rounded p-2 hover:bg-gray-100">
+          <button
+            className="rounded p-2 hover:bg-gray-100"
+            onClick={() => {
+              syncRecentEmailsMutation.mutateAsync();
+            }}
+          >
             <RefreshCw className="h-4 w-4 text-gray-600" />
           </button>
           <button className="rounded p-2 hover:bg-gray-100">
@@ -110,30 +214,31 @@ export default function EmailInbox({
 
         <div className="ml-auto flex items-center gap-2">
           <div className="text-sm text-gray-600">
-            {isLoading || isFetching || isFetchingNextPage
+            {isLoading || isFetchingNextPage
               ? "Loading..."
               : `${(page.page - 1) * 50 + 1}-${
-                  emailData?.length
-                    ? (page.page - 1) * 50 + emailData?.length
-                    : 0
+                  threads?.length ? (page.page - 1) * 50 + threads?.length : 0
                 } of ${countData || 0}`}
           </div>
           <button
-            className="rounded p-2 hover:bg-gray-100"
+            className="rounded p-2 hover:bg-gray-100 disabled:opacity-50 disabled:hover:bg-transparent"
             onClick={() => {
               setPage((prev) => ({ page: prev.page - 1 }));
             }}
-            disabled={isFetching || isFetchingNextPage}
+            disabled={isFetchingNextPage || page.page === 1}
           >
             <ChevronLeft className="h-4 w-4 text-gray-600" />
           </button>
           <button
-            className="rounded p-2 disabled:opacity-50 disabled:hover:bg-transparent hover:bg-gray-100"
+            className="rounded p-2 hover:bg-gray-100 disabled:opacity-50 disabled:hover:bg-transparent"
             onClick={() => {
               setPage((prev) => ({ page: prev.page + 1 }));
               fetchNextPage();
             }}
-            disabled={isFetching || isFetchingNextPage }
+            disabled={
+              isFetchingNextPage ||
+              (threads?.length || 0) + 50 * (page.page - 1) >= (countData || 0)
+            }
           >
             <ChevronRight className="h-4 w-4 text-gray-600" />
           </button>
@@ -142,14 +247,14 @@ export default function EmailInbox({
 
       {/* Email list */}
       <div className="flex-1 overflow-auto">
-        {isLoading || isFetching || isFetchingNextPage ? (
+        {isLoading || isFetchingNextPage ? (
           // Skeleton loading
           Array.from({ length: 10 }).map((_, index) => (
             <div
               key={index}
               className="flex items-center border-b border-gray-200 bg-white px-4 py-2 hover:shadow-sm"
             >
-              <div className="flex w-60 items-center gap-4">
+              <div className="flex w-72 items-center gap-4">
                 <div className="h-4 w-4 animate-pulse rounded bg-gray-200"></div>
                 <div className="h-4 w-4 animate-pulse rounded bg-gray-200"></div>
                 <div className="h-4 w-32 animate-pulse rounded bg-gray-200"></div>
@@ -162,7 +267,7 @@ export default function EmailInbox({
               </div>
             </div>
           ))
-        ) : !emailData?.length ? (
+        ) : !threads?.length ? (
           <div className="flex h-full flex-col items-center justify-center">
             <Inbox className="h-16 w-16 text-gray-300" />
             <p className="mt-4 text-lg text-gray-500">No emails found</p>
@@ -170,81 +275,182 @@ export default function EmailInbox({
         ) : (
           <Table>
             <TableBody>
-              {emailData.map((email, index) => {
-                const emailDate = moment(email.emailDate);
-                const isSelected = selectedEmails.includes(email.id);
-                const isStarred = starredEmails.includes(email.id);
-
+              {threads.map((thread) => {
+                const emailDate = moment(thread.threadDate);
+                const isSelected = selectedEmails.includes(thread.id);
+                const senders = thread.emails
+                  .map((email) => {
+                    if (email.sender?.name === user?.fullName) {
+                      return "Me";
+                    } else {
+                      return email.sender?.name || email.sender?.email;
+                    }
+                  });
+                const isStarred = starredEmails.includes(thread.id);
+                const isRead = readEmails.includes(thread.id);
                 return (
                   <TableRow
-                    key={email.id}
-                    className={`cursor-pointer border-b border-gray-100 bg-white py-0 text-sm hover:z-10 hover:shadow-lg mb-2 ${
-                      isSelected
-                        ? "bg-blue-50"
-                        : email.isRead
-                          ? ""
-                          : "font-semibold"
+                    key={thread.id}
+                    className={`group transform cursor-pointer border-b border-gray-200 bg-white py-0 text-sm hover:relative hover:z-10 hover:scale-100 hover:border-gray-300 hover:shadow-md ${
+                      isSelected ? "bg-blue-50" : isRead ? "bg-blue-50" : ""
                     }`}
-                    onClick={() => router.push(`/mail/${email.id}`)}
+                    onClick={() => {
+                      if (!isRead) {
+                        handleRead(thread.id);
+                      }
+                      router.push(`/mail/${thread.id}`);
+                    }}
                   >
-                    <TableCell className="flex w-72 items-center gap-1 p-1 pl-4 hover:shadow-lg">
-                      <div
-                        className="group relative overflow-hidden rounded-full p-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleEmailSelection(email.id);
-                        }}
-                      >
-                        <Checkbox
-                          className="relative z-10"
-                          checked={isSelected}
-                        />
-                        <span className="absolute inset-0 scale-0 rounded-full bg-gray-200 transition-transform duration-300 ease-out group-hover:scale-150"></span>
-                      </div>
-                      <button
-                        className="group relative overflow-hidden rounded-full p-2 text-gray-400"
-                        onClick={(e) => toggleStarred(e, email.id)}
-                      >
-                        <Star
-                          className={`relative z-10 h-4 w-4 transition-colors duration-200 ${
-                            isStarred ? "fill-yellow-500 text-yellow-500" : ""
-                          }`}
-                        />
-                        <span className="absolute inset-0 scale-0 rounded-full bg-gray-200 transition-transform duration-300 ease-out group-hover:scale-150"></span>
-                      </button>
-                      <span
-                        className={
-                          email.isRead
-                            ? "text-gray-700"
-                            : "font-semibold text-gray-800"
-                        }
-                      >
-                        {email.sender?.name || "Unknown"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="w-full max-w-0 flex-1 p-1 pr-2">
-                      <div className="truncate">
-                        {!email.isRead && (
-                          <span className="font-semibold text-gray-800">
-                            {email.emailSubject}
-                          </span>
-                        )}
-                        {email.isRead && (
-                          <span className="text-gray-700">
-                            {email.emailSubject}
-                          </span>
-                        )}
-                        <span className="ml-2 font-normal text-gray-500">
-                          - {email.emailSnippet || ""}
+                    <TableCell className="w-72 p-1">
+                      <div className="flex min-w-72 items-center gap-1 pl-4">
+                        <div
+                          className="group relative overflow-hidden rounded-full p-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleEmailSelection(thread.id);
+                          }}
+                        >
+                          <Checkbox
+                            className="relative z-10"
+                            checked={isSelected}
+                          />
+                        </div>
+                        <button
+                          className="group relative overflow-hidden rounded-full p-2 text-gray-400 transition-colors duration-200 hover:bg-gray-100"
+                          onClick={(e) => toggleStarred(e, thread.id)}
+                        >
+                          <Star
+                            className={`relative z-10 h-4 w-4 transition-colors duration-200 ${
+                              isStarred ? "fill-yellow-500 text-yellow-500" : ""
+                            }`}
+                          />
+                        </button>
+                        <span
+                          className={`${isRead ? "font-normal" : "font-semibold"} text-gray-800`}
+                        >
+                          {Array.from(new Set(senders)).join(", ")}
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="w-24 min-w-[6rem] whitespace-nowrap pr-4 text-right text-sm text-gray-500">
-                      {emailDate.isSame(moment(), "day")
-                        ? emailDate.format("h:mm A")
-                        : emailDate.isSame(moment(), "year")
-                          ? emailDate.format("MMM D")
-                          : emailDate.format("MM/DD/YY")}
+                    <TableCell className="w-full max-w-0 flex-1 space-y-2 p-1 pr-2">
+                      <div className="truncate">
+                        <span
+                          className={`${isRead ? "font-normal" : "font-semibold"} text-gray-800`}
+                        >
+                          {thread?.emails?.[0]?.emailSubject ?? "(no subject)"}
+                        </span>
+                        <span className="ml-2 font-normal text-gray-500">
+                          - {thread?.snippet || ""}
+                        </span>
+                      </div>
+                      {thread?.emails.some((email) => email.emailPdf) && (
+                        <div className="flex flex-wrap gap-2">
+                          {thread?.emails.map((email) => (
+                            <>
+                              {email.emailPdf && (
+                                <AttachmentCard
+                                  key={email.id}
+                                  fileName={email.emailPdf?.fileName}
+                                  url={email.emailPdf?.downloadKey}
+                                  mimeType={email.emailPdf?.fileFormatType}
+                                  variant="preview"
+                                  onClick={() => {
+                                    setAttachmentModal({
+                                      isOpen: true,
+                                      url: email.emailPdf!.downloadKey,
+                                      fileType: email.emailPdf!.fileFormatType,
+                                    });
+                                  }}
+                                />
+                              )}
+                            </>
+                          ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="min-w-[6rem] whitespace-nowrap p-0 pr-4 text-right text-xs font-bold text-gray-700">
+                      <div className="hidden gap-2 group-hover:flex group-hover:items-center group-hover:justify-center">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              className="rounded-full p-2 hover:bg-gray-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleArchive(thread.id);
+                              }}
+                            >
+                              <Archive className="h-[18px] w-[18px] text-gray-700" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Archive</p>
+                          </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="rounded-full p-2 hover:bg-gray-100">
+                              <Trash2 className="h-[18px] w-[18px] text-gray-700" />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Delete</p>
+                          </TooltipContent>
+                        </Tooltip>
+                        {isRead ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="rounded-full p-2 hover:bg-gray-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRead(thread.id);
+                                }}
+                              >
+                                <MailQuestion className="h-[18px] w-[18px] text-gray-700" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Mark as unread</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="rounded-full p-2 hover:bg-gray-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRead(thread.id);
+                                }}
+                              >
+                                <MailOpen className="h-[18px] w-[18px] text-gray-700" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Mark as read</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="rounded-full p-2 hover:bg-gray-100">
+                              <Clock className="h-[18px] w-[18px] text-gray-700" />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Snooze</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div
+                        className={`group-hover:hidden ${isRead ? "text-gray-500" : "text-gray-800"}`}
+                      >
+                        {emailDate.isSame(moment(), "day")
+                          ? emailDate.format("h:mm A")
+                          : emailDate.isSame(moment(), "year")
+                            ? emailDate.format("MMM D")
+                            : emailDate.format("MM/DD/YY")}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -253,6 +459,14 @@ export default function EmailInbox({
           </Table>
         )}
       </div>
+      <AttachmentPreviewModal
+        isOpen={attachmentModal.isOpen}
+        onClose={() =>
+          setAttachmentModal({ isOpen: false, url: "", fileType: "" })
+        }
+        url={attachmentModal.url}
+        fileType={attachmentModal.fileType}
+      />
     </div>
   );
 }

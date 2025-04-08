@@ -77,7 +77,7 @@ export function EmailInput({
         {value.map((item, index) => (
           <div
             key={item || index}
-            className="flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-sm text-blue-800"
+            className="flex items-center gap-1 rounded-full px-2 py-1 text-sm "
           >
             <span>{item}</span>
             <button
@@ -100,7 +100,7 @@ export function EmailInput({
           onKeyDown={handleKeyDown}
           onBlur={addEmail}
           placeholder={value.length === 0 ? placeholder : ""}
-          className="flex-1 border-none bg-transparent outline-none focus:outline-none focus:ring-0"
+          className="flex-1 border-none text-sm bg-transparent outline-none focus:outline-none focus:ring-0"
         />
       </div>
       {validationError && (

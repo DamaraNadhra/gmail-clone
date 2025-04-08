@@ -1,5 +1,4 @@
 import React, { ReactNode, useState, createContext, useContext } from "react";
-import { SignOutButton, useUser } from "@clerk/nextjs";
 import {
   Menu,
   Search,
@@ -12,15 +11,16 @@ import {
   FileText,
   MoreHorizontal,
   Plus,
-  PencilIcon
+  PencilIcon,
+  Trash2,
 } from "lucide-react";
+
 import ComposeEmail from "./ComposeEmail";
 import Image from "next/image";
 import { api } from "~/utils/api";
 import { useRouter } from "next/router";
 import { useDebounce } from "use-debounce";
-
-
+import { useSession, signOut } from "next-auth/react";
 interface GmailLayoutProps {
   children: ReactNode;
 }
@@ -31,14 +31,15 @@ const SearchContext = createContext({
 });
 
 export default function GmailLayout({ children }: GmailLayoutProps) {
-  const { user } = useUser();
+  const { data: session } = useSession();
+  
   const [showCompose, setShowCompose] = useState(false);
   const [minimizeCompose, setMinimizeCompose] = useState(false);
   const createDraftMutation = api.email.createDraft.useMutation();
-  const [selectedTab, setSelectedTab] = useState("Inbox");
   const [draftId, setDraftId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
+  const user = session?.user;  
   const router = useRouter();
   const handleComposeClick = async () => {
     if (minimizeCompose) {
@@ -52,9 +53,14 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
       setShowCompose(true);
     }
   };
+  const routerQuery = router.pathname.split("/")[1];
+  const [selectedTab, setSelectedTab] = useState(routerQuery && routerQuery?.length > 0 ? routerQuery : "inbox");
   const { data: emailInboxCount } = api.email.getUserEmailsCount.useQuery();
   const { data: emailDraftsCount } = api.email.getEmailDraftsCount.useQuery();
-  const { data: emailStarredCount } = api.email.getStarredEmailsCount.useQuery();
+  const { data: emailStarredCount } =
+    api.email.getStarredEmailsCount.useQuery({
+      search: debouncedSearch,
+    });
   const handleCloseCompose = () => {
     setShowCompose(false);
     setMinimizeCompose(false);
@@ -67,15 +73,16 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
   const handleMaximizeCompose = () => {
     setMinimizeCompose(false);
   };
-
   return (
     <div className="flex h-screen flex-col bg-[#f8fafd]">
       {/* Header */}
       <header className="flex h-16 items-center px-4">
         <div className="flex items-center gap-4">
-          <button className="rounded-full p-2 hover:bg-gray-100">
-            <Menu className="h-5 w-5 text-gray-600" />
-          </button>
+          {/* <SignOutButton> */}
+            <button className="rounded-full p-2 hover:bg-gray-100">
+              <Menu className="h-5 w-5 text-gray-600" />
+            </button>
+          {/* </SignOutButton> */}
           <div className="flex items-center gap-2">
             <Image
               src={
@@ -108,19 +115,20 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
           <button className="rounded-full p-2 hover:bg-gray-100">
             <Settings className="h-5 w-5 text-gray-600" />
           </button>
-          <div className="ml-2 h-8 w-8 overflow-hidden rounded-full bg-gray-300">
+            <button className="ml-2 h-8 w-8 overflow-hidden rounded-full bg-gray-300"
+            onClick={() => signOut()}>
             {user?.imageUrl ? (
               <img
                 src={user.imageUrl}
-                alt={user.firstName || "User"}
+                alt={user.fullName || "User"}
                 className="h-full w-full object-cover"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center bg-blue-500 text-white">
-                {user?.firstName?.[0] || "U"}
-              </div>
-            )}
-          </div>
+                {user?.fullName?.[0] || "U"}
+                </div>
+              )}
+            </button>
         </div>
       </header>
 
@@ -128,7 +136,7 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
         {/* Sidebar */}
         <aside className="flex w-64 flex-col py-4 pr-4">
           <button
-            className="mb-4 flex items-center w-fit gap-4 ml-2 mr-14 rounded-2xl text-sm bg-[#c2e7ff] px-4 py-[17px] font-medium shadow-sm hover:shadow-md"
+            className="mb-4 ml-2 mr-14 flex w-fit items-center gap-4 rounded-2xl bg-[#c2e7ff] px-4 py-[17px] text-sm font-medium shadow-sm hover:shadow-md"
             onClick={handleComposeClick}
           >
             <PencilIcon className="h-5 w-5" />
@@ -139,25 +147,40 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
             {[
               {
                 icon: <Mail className="h-4 w-4" />,
-                label: "Inbox",
+                label: "inbox",
                 count: emailInboxCount,
                 href: "/",
               },
-              { icon: <Star className="h-4 w-4" />, label: "Starred", href: "/starred", count: emailStarredCount },
-              { icon: <Clock className="h-4 w-4" />, label: "Snoozed", href: "#x" },
-              { icon: <Send className="h-4 w-4" />, label: "Sent", href: "#" },
+              {
+                icon: <Star className="h-4 w-4" />,
+                label: "starred",
+                href: "/starred",
+                count: emailStarredCount,
+              },
+              {
+                icon: <Clock className="h-4 w-4" />,
+                label: "snoozed",
+                href: "#x",
+              },
+              { icon: <Send className="h-4 w-4" />, label: "sent", href: "/sent" },
               {
                 icon: <FileText className="h-4 w-4" />,
-                label: "Drafts",
+                label: "drafts",
                 count: emailDraftsCount,
                 href: "/drafts",
+              },
+              {
+                icon: <Trash2 className="h-4 w-4" />,
+                label: "trash",
+                href: "/trash",
+                count: 0,
               },
             ].map((item, index) => (
               <div
                 key={index}
                 className={`flex cursor-pointer items-center justify-between rounded-r-full px-3 py-2 text-sm ${
-                  selectedTab === item.label
-                    ? "bg-blue-100 font-medium text-gray-700"
+                  selectedTab === item.label.toLowerCase()
+                    ? "bg-blue-100 font-semibold text-gray-700"
                     : "hover:bg-gray-100"
                 }`}
                 onClick={() => {
@@ -169,9 +192,9 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
               >
                 <div className="flex items-center gap-3 pl-3">
                   {item.icon}
-                  <span>{item.label}</span>
+                  <span className="capitalize">{item.label}</span>
                 </div>
-                {item.count && <span className="text-xs">{item.count}</span>}
+                <span className="text-xs">{item.count}</span>
               </div>
             ))}
           </nav>
@@ -191,8 +214,10 @@ export default function GmailLayout({ children }: GmailLayoutProps) {
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto">
-          <SearchContext.Provider value={{ query: debouncedSearch, setQuery: setSearch }}>
+        <main className="w-full flex-1">
+          <SearchContext.Provider
+            value={{ query: debouncedSearch, setQuery: setSearch }}
+          >
             {children}
           </SearchContext.Provider>
         </main>

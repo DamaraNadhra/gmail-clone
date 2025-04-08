@@ -8,20 +8,25 @@ import {
   MoreVertical,
   Trash2,
   Send,
+  Reply,
+  Forward,
+  LucideReply,
 } from "lucide-react";
+
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
 import { DraftEmail } from "~/types/types";
 import { useDebounce } from "use-debounce";
 import { api } from "~/utils/api";
-import { useUser } from "@clerk/nextjs";
+// import { useUser } from "@clerk/nextjs";
 import { Textarea } from "~/components/ui/textarea";
 import { EmailInput } from "~/components/EmailInput";
 
 interface ComposeEmailProps {
   onClose: () => void;
   minimized?: boolean;
+  variant?: "draft" | "reply";
   onMinimize?: () => void;
   onMaximize?: () => void;
   existingDraftId?: string;
@@ -45,8 +50,9 @@ export default function ComposeEmail({
   onMinimize,
   onMaximize,
   existingDraftId,
+  variant = "draft",
 }: ComposeEmailProps) {
-  const { user } = useUser();
+  // const { user } = useUser();
   const [isMaximized, setIsMaximized] = useState(false);
   const [draftId, setDraftId] = useState<string | undefined>(existingDraftId);
   const [lastSavedValues, setLastSavedValues] = useState<FormValues | null>(
@@ -56,8 +62,8 @@ export default function ComposeEmail({
 
   // Query for getting draft details
   const { data: draftData, error: draftError } =
-    api.email.getDraftById.useQuery(
-      { draftId: existingDraftId || "" },
+    api.email.getEmailById.useQuery(
+      { emailId: existingDraftId || "" },
       {
         enabled: !!existingDraftId && existingDraftId.length > 0,
         retry: false,
@@ -126,26 +132,26 @@ export default function ComposeEmail({
 
   // Load existing draft if data is available
   useEffect(() => {
-    if (draftData?.draft) {
+    if (draftData) {
       // Get all "To" recipients
-      const toRecipients = draftData.draft.recipients
-        .filter((r: any) => r.isTo)
+      const toRecipients = draftData.recipients
+        ?.filter((r: any) => r.isTo)
         .map((r: any) => r.emailPerson.email);
 
       // Get all "Cc" recipients
-      const ccRecipients = draftData.draft.recipients
-        .filter((r: any) => r.isCc)
+      const ccRecipients = draftData.recipients
+        ?.filter((r: any) => r.isCc)
         .map((r: any) => r.emailPerson.email);
 
       // Get all "Bcc" recipients
-      const bccRecipients = draftData.draft.recipients
-        .filter((r: any) => r.isBcc)
+      const bccRecipients = draftData.recipients
+        ?.filter((r: any) => r.isBcc)
         .map((r: any) => r.emailPerson.email);
 
       // Update form values
       form.reset({
-        subject: draftData.draft.emailSubject,
-        content: draftData.draft.emailContent,
+        subject: draftData.emailSubject,
+        content: draftData.emailContent,
         to: toRecipients,
         cc: ccRecipients,
         bcc: bccRecipients,
@@ -208,7 +214,7 @@ export default function ComposeEmail({
   };
 
   const handleSaveDraft = async () => {
-    if (!user || isSaving) return;
+    // if (!user || isSaving) return;
 
     try {
       setIsSaving(true);
@@ -275,6 +281,99 @@ export default function ComposeEmail({
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (variant === "reply") {
+    return (
+      <div className="flex h-full flex-col rounded-2xl border border-gray-300 bg-white p-2 focus-within:shadow-lg hover:shadow-lg">
+        {/* Email form */}
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="flex flex-1 flex-col"
+          >
+            <div className="flex flex-col gap-2 p-0">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 rounded-md p-2">
+                  <LucideReply className="h-5 w-5 text-gray-600" />
+                  <span className="text-sm text-gray-600">▾</span>
+                </div>
+                <Controller
+                  control={form.control}
+                  name="to"
+                  render={({ field }) => (
+                    <EmailInput
+                      placeholder="Recipient email"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      className="flex-1"
+                    />
+                  )}
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 p-4">
+              <FormField
+                control={form.control}
+                name="content"
+                render={({ field }) => (
+                  <FormControl>
+                    <Textarea
+                      placeholder="Write your reply here..."
+                      {...field}
+                      className="h-full w-full resize-none border-none bg-transparent outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                    />
+                  </FormControl>
+                )}
+              />
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between border-t border-gray-200 p-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="submit"
+                  className="rounded-md bg-blue-500 px-4 py-2 font-medium text-white hover:bg-blue-600"
+                >
+                  <div className="flex items-center gap-2">
+                    <Send className="h-4 w-4" />
+                    <span>Send</span>
+                  </div>
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="rounded p-2 hover:bg-gray-100"
+                >
+                  <Paperclip className="h-4 w-4 text-gray-600" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="rounded p-2 hover:bg-gray-100"
+                >
+                  <MoreVertical className="h-4 w-4 text-gray-600" />
+                </Button>
+              </div>
+
+              <Button
+                type="button"
+                variant="ghost"
+                className="rounded p-2 hover:bg-gray-100"
+                onClick={() => {
+                  // TODO: Implement delete draft functionality
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-gray-600" />
+              </Button>
+            </div>
+          </form>
+        </Form>
       </div>
     );
   }

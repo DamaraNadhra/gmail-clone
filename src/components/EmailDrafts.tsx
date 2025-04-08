@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { api } from "~/utils/api";
-import { useUser } from "@clerk/nextjs";
 import moment from "~/utils/moment-adapter";
-import { useRouter } from "next/router";
 import { NumberParam, useQueryParams, withDefault } from "use-query-params";
 import {
   RefreshCw,
@@ -15,10 +13,10 @@ import {
 import { Checkbox } from "./ui/checkbox";
 import { Table, TableBody, TableCell, TableRow } from "./ui/table";
 import ComposeEmail from "./ComposeEmail";
-
+import { useSession } from "next-auth/react";
 export default function EmailDrafts() {
-  const router = useRouter();
-  const { user } = useUser();
+  const { data: session } = useSession();
+  const user = session?.user;
   const [selectedDrafts, setSelectedDrafts] = useState<string[]>([]);
   const [starredDrafts, setStarredDrafts] = useState<string[]>([]);
   const [showCompose, setShowCompose] = useState(false);

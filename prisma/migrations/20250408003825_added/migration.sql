@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "thread" ADD COLUMN     "subject" TEXT,
+ADD COLUMN     "threadDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
